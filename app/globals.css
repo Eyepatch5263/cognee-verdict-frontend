@@ -1,26 +1,148 @@
 @import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #FAF6F0;
+  --foreground: #2D312E;
+  --card: #F4F0E6;
+  --card-foreground: #2D312E;
+  --popover: #F4F0E6;
+  --popover-foreground: #2D312E;
+  --primary: #4A6B53;
+  --primary-foreground: #FAF6F0;
+  --secondary: #EFECE1;
+  --secondary-foreground: #2D312E;
+  --muted: #EFECE1;
+  --muted-foreground: #5C615D;
+  --accent: #4A6B53;
+  --accent-foreground: #FAF6F0;
+  --destructive: #B85C4C;
+  --destructive-foreground: #FAF6F0;
+  --border: #D0CBB7;
+  --input: #D0CBB7;
+  --ring: #4A6B53;
+  --confidence: #6B8E23;
+  --confidence-foreground: #FAF6F0;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background) !important;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inria-serif), Georgia, serif;
+  overflow-x: hidden;
+}
+
+/* Titles, headings, buttons, tabs are in Inria Sans */
+h1, h2, h3, h4, h5, h6, th, button, select, input, label, .font-sans {
+  font-family: var(--font-inria-sans), system-ui, sans-serif !important;
+}
+
+.font-serif {
+  font-family: var(--font-inria-serif), Georgia, serif !important;
+}
+
+/* Force React Flow light background */
+.react-flow,
+.react-flow__pane,
+.react-flow__viewport {
+  background-color: #FAF6F0 !important;
+  background: #FAF6F0 !important;
+}
+
+/* React Flow custom styling for light warm mode */
+.react-flow__node {
+  background: #F4F0E6;
+  color: #2D312E;
+  border: 1px solid #D0CBB7;
+  border-radius: 8px;
+  font-size: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.03);
+  transition: all 0.2s ease;
+}
+
+.react-flow__node:hover {
+  border-color: #4A6B53;
+  box-shadow: 0 0 12px rgba(74, 107, 83, 0.1);
+}
+
+.react-flow__node.selected {
+  border-color: #4A6B53;
+  box-shadow: 0 0 16px rgba(74, 107, 83, 0.2);
+}
+
+.react-flow__edge-path {
+  stroke: #B8B3A0;
+  stroke-width: 2;
+  transition: stroke 0.2s ease;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #4A6B53;
+  stroke-width: 3;
+}
+
+.react-flow__edge-text {
+  fill: #2D312E;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.react-flow__edge-textbg {
+  fill: #FAF6F0;
+  rx: 4;
+  ry: 4;
+}
+
+.react-flow__controls {
+  background: #F4F0E6 !important;
+  border: 1px solid #D0CBB7 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.03) !important;
+}
+
+.react-flow__controls-button {
+  background: #F4F0E6 !important;
+  color: #5C615D !important;
+  border-bottom: 1px solid #D0CBB7 !important;
+  fill: currentColor !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #EFECE1 !important;
+  color: #2D312E !important;
+}
+
+.react-flow__minimap {
+  background: #F4F0E6 !important;
+  border: 1px solid #D0CBB7 !important;
+  border-radius: 8px !important;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FAF6F0;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D0CBB7;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #B8B3A0;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease forwards;
 }
