@@ -490,7 +490,7 @@ export class CogniVerdictAPI {
     return res.json();
   }
 
-  static async getCaseAnalysis(datasetId: string): Promise<CaseAnalysis> {
+  static async getCaseAnalysis(datasetId: string, bypassCache: boolean = false): Promise<CaseAnalysis> {
     const isHealthy = await this.checkBackendHealth();
     if (!isHealthy) {
       // Fallback combining MOCK_REASONING with calculated mock metrics
@@ -530,7 +530,8 @@ export class CogniVerdictAPI {
       };
     }
 
-    const res = await fetch(`${BASE_URL}/cases/${datasetId}/analysis`);
+    const url = `${BASE_URL}/cases/${datasetId}/analysis${bypassCache ? "?bypass_cache=true" : ""}`;
+    const res = await fetch(url);
     if (!res.ok) throw new Error("Failed to fetch case analysis");
     return res.json();
   }

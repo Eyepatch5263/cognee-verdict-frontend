@@ -17,6 +17,7 @@ import {
   GraphEdge, 
   RecallResult 
 } from "@/lib/api";
+import { Scale } from "lucide-react";
 
 
 export default function Home() {
@@ -25,6 +26,7 @@ export default function Home() {
   const [cases, setCases] = useState<Case[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
 
   // Case details states
   const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
@@ -86,46 +88,43 @@ export default function Home() {
       if (isLive && activeCaseStatus !== "completed") {
         return;
       }
+      setIsAnalysisLoading(true);
       try {
-        const graph = await CogniVerdictAPI.getCaseGraph(caseId);
-        setGraphNodes(graph?.nodes || []);
-        setGraphEdges(graph?.edges || []);
-      } catch (err) {
-        console.error("Failed to load case graph:", err);
-        setGraphNodes([]);
-        setGraphEdges([]);
-      }
+        try {
+          const graph = await CogniVerdictAPI.getCaseGraph(caseId);
+          setGraphNodes(graph?.nodes || []);
+          setGraphEdges(graph?.edges || []);
+        } catch (err) {
+          console.error("Failed to load case graph:", err);
+          setGraphNodes([]);
+          setGraphEdges([]);
+        }
 
-      try {
-        const chunks = await CogniVerdictAPI.getCaseChunks(caseId);
-        setCaseChunks(chunks || []);
-      } catch (err) {
-        console.error("Failed to load case chunks:", err);
-        setCaseChunks([]);
-      }
+        try {
+          const chunks = await CogniVerdictAPI.getCaseChunks(caseId);
+          setCaseChunks(chunks || []);
+        } catch (err) {
+          console.error("Failed to load case chunks:", err);
+          setCaseChunks([]);
+        }
 
-      try {
-        const prov = await CogniVerdictAPI.getCaseProvenance(caseId);
-        setCaseProvenance(prov || null);
-      } catch (err) {
-        console.error("Failed to load case provenance:", err);
-        setCaseProvenance(null);
-      }
+        try {
+          const prov = await CogniVerdictAPI.getCaseProvenance(caseId);
+          setCaseProvenance(prov || null);
+        } catch (err) {
+          console.error("Failed to load case provenance:", err);
+          setCaseProvenance(null);
+        }
 
-      try {
-        const cites = await CogniVerdictAPI.getCaseCitations(caseId);
-        setCaseCitations(cites || []);
-      } catch (err) {
-        console.error("Failed to load case citations:", err);
-        setCaseCitations([]);
-      }
+        try {
+          const cites = await CogniVerdictAPI.getCaseCitations(caseId);
+          setCaseCitations(cites || []);
+        } catch (err) {
+          console.error("Failed to load case citations:", err);
+          setCaseCitations([]);
+        }
 
-      try {
-        const currentCase = cases.find(c => c.id === caseId);
-        const hasAnalysis = currentCase && (currentCase.witnesses && currentCase.witnesses.length > 0);
-        
-        if (!hasAnalysis) {
-          console.log("Fetching case analysis for:", caseId);
+        try {
           const analysis = await CogniVerdictAPI.getCaseAnalysis(caseId);
           setCases(prev => prev.map(c => {
             if (c.id === caseId) {
@@ -142,11 +141,11 @@ export default function Home() {
             }
             return c;
           }));
-        } else {
-          console.log("Analysis already loaded, skipping fetch for case:", caseId);
+        } catch (err) {
+          console.error("Failed to load case analysis:", err);
         }
-      } catch (err) {
-        console.error("Failed to fetch full case analysis scores:", err);
+      } finally {
+        setIsAnalysisLoading(false);
       }
     }
 
@@ -338,46 +337,137 @@ export default function Home() {
 
   // Dynamically extract evidence nodes from graph to provide to FeedbackPanel
   const evidenceNodes = useMemo(() => {
-    const seenLabels = new Set<string>();
+    // 1. Identify all document / source nodes in the graph
+    const docNodesMap = new Map<string, string>(); // maps id -> document label (e.g. "WS-001")
+    
+    graphNodes.forEach(n => {
+      const typeLower = (n.type || "").toLowerCase();
+      const labelLower = (n.label || "").toLowerCase();
+      
+      const isDoc = ["textdocument", "document", "file", "ws-", "er-", "ir-", "cctv-", "report"].some(
+        x => typeLower.includes(x) || labelLower.includes(x)
+      ) || labelLower.startsWith("ws-") || labelLower.startsWith("er-") || labelLower.startsWith("ir-") || labelLower.startsWith("cctv-");
+      
+      const isChunk = labelLower.includes("chunk");
+
+      if (isDoc && !isChunk) {
+        docNodesMap.set(n.id, n.label);
+      }
+    });
+
+    // 2. Extract actual evidence entities and map them to their document source
+    const seenKeys = new Set<string>();
     const nodesList: { id: string; label: string }[] = [];
 
     graphNodes.forEach(n => {
       const typeLower = (n.type || "").toLowerCase();
       const labelLower = (n.label || "").toLowerCase();
-      
-      const isEvNode = ["evidence", "document", "report", "cctv", "dna", "log", "statement", "testimony"].some(
+
+      // Exclude document nodes or chunk nodes themselves
+      const isDocOrChunk = ["chunk", "summary", "textdocument", "document", "file", "metadata", "dataset", "cases"].some(
+        x => typeLower.includes(x) || labelLower.includes(x)
+      ) || labelLower.startsWith("ws-") || labelLower.startsWith("er-") || labelLower.startsWith("ir-") || labelLower.startsWith("cctv-");
+
+      if (isDocOrChunk) return;
+
+      // Include valid evidence types or labels
+      const isEvNode = ["evidence", "cctv", "dna", "log", "statement", "testimony", "asset", "event", "knife", "phone", "sedan", "canister", "report", "weapon", "fingerprint"].some(
         x => typeLower.includes(x) || labelLower.includes(x)
       );
 
       if (isEvNode) {
+        // Trace to find which document node this evidence is connected to
+        let sourceDocLabel = "";
+        
+        // Find connected edges
+        const connectedEdges = graphEdges.filter(e => e.source === n.id || e.target === n.id);
+        
+        // Try direct edge to document first
+        for (const edge of connectedEdges) {
+          const otherId = edge.source === n.id ? edge.target : edge.source;
+          if (docNodesMap.has(otherId)) {
+            sourceDocLabel = docNodesMap.get(otherId) || "";
+            break;
+          }
+        }
+        
+        // If not found directly, try finding edge to a chunk first, and then chunk to document
+        if (!sourceDocLabel) {
+          for (const edge of connectedEdges) {
+            const otherId = edge.source === n.id ? edge.target : edge.source;
+            const otherNode = graphNodes.find(gn => gn.id === otherId);
+            if (otherNode && (otherNode.label || "").toLowerCase().includes("chunk")) {
+              // Find edges connecting this chunk to a document
+              const chunkEdges = graphEdges.filter(e => e.source === otherId || e.target === otherId);
+              for (const ce of chunkEdges) {
+                const docId = ce.source === otherId ? ce.target : ce.source;
+                if (docNodesMap.has(docId)) {
+                  sourceDocLabel = docNodesMap.get(docId) || "";
+                  break;
+                }
+              }
+            }
+            if (sourceDocLabel) break;
+          }
+        }
+
+        // Format clean name for the evidence
         let cleanLabel = n.label;
         if (cleanLabel.toLowerCase().includes("_chunk_")) {
           cleanLabel = cleanLabel.split("_chunk_")[0];
         }
-        cleanLabel = cleanLabel.replace(/_/g, " ").trim();
+        if (cleanLabel.includes(".")) {
+          cleanLabel = cleanLabel.split(".")[0];
+        }
+        cleanLabel = cleanLabel.replace(/([A-Z])/g, " $1");
+        cleanLabel = cleanLabel.replace(/[_-]/g, " ").trim();
+        cleanLabel = cleanLabel.split(" ")
+          .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
 
-        const key = cleanLabel.toLowerCase();
-        if (!seenLabels.has(key)) {
-          seenLabels.add(key);
-          nodesList.push({ id: n.id, label: cleanLabel });
+        // Format document label cleanly (e.g. "WS-001" -> "WS-001")
+        let cleanDoc = sourceDocLabel;
+        if (cleanDoc) {
+          cleanDoc = cleanDoc.replace(/[_-]/g, " ").trim();
+        }
+
+        let displayLabel = cleanLabel;
+        if (cleanDoc) {
+          displayLabel = `${cleanLabel} (from ${cleanDoc})`;
+        } else {
+          // Fallback to properties if any
+          const props = n.properties || {};
+          const propDoc = props.source || props.document || props.file;
+          if (propDoc) {
+            displayLabel = `${cleanLabel} (from ${propDoc})`;
+          }
+        }
+
+        const key = displayLabel.toLowerCase();
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          nodesList.push({ id: n.id, label: displayLabel });
         }
       }
     });
 
     if (nodesList.length === 0) {
       return [
-        { id: "evidence-forensic", label: "Forensic Laboratory Report" },
-        { id: "evidence-cctv", label: "CCTV Digital Access Logs" },
-        { id: "evidence-dna", label: "DNA Fingerprint Analysis" }
+        { id: "evidence-forensic", label: "Forensic Laboratory Report (from ER-001)" },
+        { id: "evidence-cctv", label: "CCTV Digital Access Logs (from CCTV-002)" },
+        { id: "evidence-dna", label: "DNA Fingerprint Analysis (from ER-002)" }
       ];
     }
 
     return nodesList;
-  }, [graphNodes]);
+  }, [graphNodes, graphEdges]);
 
   // Handle feedback override submission and recomputation
   const handleApplyFeedback = async (feedbacks: any[]) => {
     if (!activeCaseId) return;
+    setIsAnalysisLoading(true);
     try {
       const updatedAnalysis = await CogniVerdictAPI.submitCaseFeedback(activeCaseId, feedbacks);
       
@@ -405,6 +495,36 @@ export default function Home() {
     } catch (err: any) {
       console.error("Feedback pipeline execution failed:", err);
       throw new Error(err.message || "Pipeline recomputation error.");
+    } finally {
+      setIsAnalysisLoading(false);
+    }
+  };
+
+  // Handle case analysis trigger
+  const handleAnalyzeCase = async (caseId: string) => {
+    setIsAnalysisLoading(true);
+    try {
+      const analysis = await CogniVerdictAPI.getCaseAnalysis(caseId, true);
+      setCases(prev => prev.map(c => {
+        if (c.id === caseId) {
+          return {
+            ...c,
+            confidenceScore: analysis.ui_metrics.confidenceScore,
+            suspectProbability: analysis.ui_metrics.suspectProbability,
+            convictionProbability: analysis.ui_metrics.convictionProbability,
+            witnesses: analysis.ui_metrics.witnesses,
+            contradictions: analysis.ui_metrics.contradictions,
+            feedbacks: analysis.feedbacks,
+            status: "completed"
+          };
+        }
+        return c;
+      }));
+    } catch (err) {
+      console.error("Failed to run case analysis:", err);
+      throw err;
+    } finally {
+      setIsAnalysisLoading(false);
     }
   };
 
@@ -501,16 +621,52 @@ export default function Home() {
           />
         );
       case "analysis":
+        if (isAnalysisLoading) {
+          return (
+            <div className="flex-1 flex flex-col items-center justify-center text-center text-[#5C615D] bg-[#FAF6F0] h-screen font-serif">
+              <div className="flex flex-col items-center gap-4 p-8 bg-[#F4F0E6] border border-[#D0CBB7] rounded-2xl shadow-sm max-w-md">
+                <div className="relative w-16 h-16 flex items-center justify-center">
+                  <div className="absolute inset-0 border-4 border-[#4A6B53]/20 rounded-full" />
+                  <div className="absolute inset-0 border-4 border-[#4A6B53] border-t-transparent rounded-full animate-spin" />
+                  <Scale className="w-6 h-6 text-[#4A6B53] animate-pulse" />
+                </div>
+                <h4 className="font-semibold text-lg text-[#2D312E] tracking-tight mt-2">Running Legal Intelligence Engine</h4>
+                <p className="text-xs text-[#5C615D] leading-relaxed">
+                  Executing Phase 3 LLM reasoning orchestration and Phase 4 mathematical evidence weighting. This may take up to 20 seconds.
+                </p>
+              </div>
+            </div>
+          );
+        }
         return (
           <AnalysisDashboard
             activeCaseId={activeCaseId}
             activeCase={activeCase}
             nodes={graphNodes}
+            edges={graphEdges}
             onImproveMemory={handleImproveMemory}
             onSubmitFeedback={handleApplyFeedback}
+            onAnalyzeCase={handleAnalyzeCase}
           />
         );
       case "feedback":
+        if (isAnalysisLoading) {
+          return (
+            <div className="flex-1 flex flex-col items-center justify-center text-center text-[#5C615D] bg-[#FAF6F0] h-screen font-serif">
+              <div className="flex flex-col items-center gap-4 p-8 bg-[#F4F0E6] border border-[#D0CBB7] rounded-2xl shadow-sm max-w-md">
+                <div className="relative w-16 h-16 flex items-center justify-center">
+                  <div className="absolute inset-0 border-4 border-[#4A6B53]/20 rounded-full" />
+                  <div className="absolute inset-0 border-4 border-[#4A6B53] border-t-transparent rounded-full animate-spin" />
+                  <Scale className="w-6 h-6 text-[#4A6B53] animate-pulse" />
+                </div>
+                <h4 className="font-semibold text-lg text-[#2D312E] tracking-tight mt-2">Running Legal Intelligence Engine</h4>
+                <p className="text-xs text-[#5C615D] leading-relaxed">
+                  Executing Phase 3 LLM reasoning orchestration and Phase 4 mathematical evidence weighting. This may take up to 20 seconds.
+                </p>
+              </div>
+            </div>
+          );
+        }
         return (
           <FeedbackPanel
             activeCaseId={activeCaseId}

@@ -56,6 +56,71 @@ export default function FeedbackPanel({
   const [witnessAction, setWitnessAction] = useState<"mark_reliable" | "mark_unreliable" | "correct">("mark_reliable");
   const [witnessValue, setWitnessValue] = useState("1.0");
 
+  const witnessesList = useMemo(() => {
+    if (activeCase?.witnesses && activeCase.witnesses.length > 0) {
+      return activeCase.witnesses;
+    }
+    
+    // Fallback default/mock witnesses for the active case
+    if (activeCaseId === "CASE_001") {
+      return [
+        { name: "Priya Mehta", role: "Witness" },
+        { name: "Vikram Desai", role: "Suspect" },
+        { name: "Officer Sean Ryan", role: "Witness" }
+      ];
+    }
+    if (activeCaseId === "CASE_002") {
+      return [
+        { name: "Rohan Joshi", role: "Witness" },
+        { name: "Maya Lin", role: "Suspect" }
+      ];
+    }
+    if (activeCaseId === "CASE_003") {
+      return [
+        { name: "Elena Rostova", role: "Witness" },
+        { name: "Nikolai Vance", role: "Suspect" }
+      ];
+    }
+
+    // Try to extract from evidenceNodes or return mock
+    return [
+      { name: "Priya Mehta", role: "Witness" },
+      { name: "Vikram Desai", role: "Suspect" },
+      { name: "Officer Sean Ryan", role: "Witness" }
+    ];
+  }, [activeCase?.witnesses, activeCaseId]);
+
+  const contradictionsList = useMemo(() => {
+    if (activeCase?.contradictions && activeCase.contradictions.length > 0) {
+      return activeCase.contradictions;
+    }
+    // Fallback mock contradictions if the analysis hasn't run yet
+    if (activeCaseId === "CASE_001") {
+      return [
+        {
+          id: "contra-timeline-priya",
+          title: "Timeline Discrepancy",
+          description: "Priya Mehta claims she heard a scream at 10:30 PM, but forensic autopsy places death between 9:30 PM and 10:15 PM."
+        },
+        {
+          id: "contra-cctv-footprint",
+          title: "CCTV Access Conflict",
+          description: "CCTV logs show the back door was locked from 10:00 PM, contradicting testimony that the suspect entered there at 10:15 PM."
+        }
+      ];
+    }
+    if (activeCaseId === "CASE_002") {
+      return [
+        {
+          id: "contra-maya-alibi",
+          title: "Alibi Contradiction",
+          description: "Maya Lin claims she was at a restaurant, but cell tower pings place her phone near the scene of the incident."
+        }
+      ];
+    }
+    return [];
+  }, [activeCase?.contradictions, activeCaseId]);
+
   const queueFeedbackItem = (item: FeedbackItem) => {
     // Avoid duplicates by target and type
     setQueuedFeedback(prev => {
@@ -306,7 +371,7 @@ export default function FeedbackPanel({
                   required
                 >
                   <option value="">Select witness...</option>
-                  {activeCase.witnesses.map((w) => (
+                  {witnessesList.map((w) => (
                     <option key={w.name} value={w.name}>
                       {w.name} ({w.role})
                     </option>
@@ -363,7 +428,7 @@ export default function FeedbackPanel({
               </p>
 
               <div className="space-y-2.5 max-h-60 overflow-y-auto pt-2 pr-1">
-                {activeCase.contradictions.map((contra) => {
+                {contradictionsList.map((contra) => {
                   const isDismissed = queuedFeedback.some(q => q.feedback_type === "contradiction_override" && q.target === contra.id);
                   return (
                     <div key={contra.id} className="p-3 bg-[#FAF6F0] border border-[#D0CBB7] rounded-lg flex items-start justify-between gap-3">
@@ -385,7 +450,7 @@ export default function FeedbackPanel({
                     </div>
                   );
                 })}
-                {activeCase.contradictions.length === 0 && (
+                {contradictionsList.length === 0 && (
                   <p className="text-xs text-[#5C615D] italic text-center py-4">No contradictions to override.</p>
                 )}
               </div>
@@ -403,7 +468,7 @@ export default function FeedbackPanel({
 
               <div className="space-y-2.5 pt-2">
                 {/* List suspects */}
-                {activeCase.witnesses.filter(w => w.role.includes("Defendant") || w.role.includes("Suspect")).map((sus) => {
+                {witnessesList.filter(w => w.role.toLowerCase().includes("defendant") || w.role.toLowerCase().includes("suspect")).map((sus) => {
                   const isDismissed = queuedFeedback.some(q => q.feedback_type === "theory_dismissal" && q.target === sus.name);
                   return (
                     <div key={sus.name} className="p-3 bg-[#FAF6F0] border border-[#D0CBB7] rounded-lg flex items-center justify-between gap-3">
@@ -461,7 +526,12 @@ export default function FeedbackPanel({
                   <div className="font-mono text-[9px] uppercase tracking-wider text-[#4A6B53] font-bold">
                     {item.feedback_type.replace(/_/g, " ")}
                   </div>
-                  <div className="font-semibold text-[#2D312E] pr-6">{item.target}</div>
+                  <div className="font-semibold text-[#2D312E] pr-6">
+                    {item.feedback_type === "evidence_correction"
+                      ? (evidenceNodes.find(n => n.id === item.target)?.label || item.target)
+                      : item.target
+                    }
+                  </div>
                   <div className="text-[10px] text-[#5C615D] leading-snug">
                     Action: <span className="font-semibold">{item.action}</span>
                     {item.value !== undefined && ` (${item.value})`}
