@@ -604,6 +604,25 @@ export class CogniVerdictAPI {
       return null;
     }
   }
+
+  static async generateBriefs(caseId: string): Promise<any> {
+    const res = await fetch(`${BASE_URL}/cases/${caseId}/briefs/generate`, {
+      method: "POST"
+    });
+    if (!res.ok) throw new Error("Failed to generate legal briefs");
+    return res.json();
+  }
+
+  static async fetchBriefs(caseId: string): Promise<any> {
+    const res = await fetch(`${BASE_URL}/cases/${caseId}/briefs`, {
+      method: "GET"
+    });
+    if (res.status === 404) {
+      return null;
+    }
+    if (!res.ok) throw new Error("Failed to fetch legal briefs");
+    return res.json();
+  }
 }
 
 export interface BenchmarkCaseItem {

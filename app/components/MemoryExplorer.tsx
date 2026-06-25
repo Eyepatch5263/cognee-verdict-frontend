@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { GraphNode, GraphEdge, RecallResult } from "@/lib/api";
+import { GraphNode, GraphEdge, RecallResult, CogniVerdictAPI } from "@/lib/api";
 import { 
   ReactFlow, 
   Controls, 
@@ -23,7 +23,10 @@ import {
   Link,
   HelpCircle,
   Eye,
-  RefreshCw
+  RefreshCw,
+  X,
+  Clipboard,
+  Download
 } from "lucide-react";
 
 // Custom node components for clean visual structure
@@ -111,6 +114,92 @@ const nodeTypes = {
   columnHeader: ColumnHeaderNode
 };
 
+function renderMarkdown(text: string) {
+  if (!text) return null;
+  
+  const lines = text.split("\n");
+  let inList = false;
+  const renderedElements: React.ReactNode[] = [];
+  let listItems: React.ReactNode[] = [];
+  
+  const flushList = (keyPrefix: string) => {
+    if (listItems.length > 0) {
+      renderedElements.push(
+        <ul key={`list-${keyPrefix}`} className="list-disc pl-5 mb-4 space-y-1.5 text-xs md:text-sm text-[#2D312E]">
+          {listItems}
+        </ul>
+      );
+      listItems = [];
+      inList = false;
+    }
+  };
+
+  const parseInlineStyles = (lineText: string) => {
+    const parts = lineText.split(/\*\*([^*]+)\*\*/g);
+    return parts.map((part, idx) => {
+      if (idx % 2 === 1) {
+        return <strong key={idx} className="font-bold text-[#2D312E]">{part}</strong>;
+      }
+      return part;
+    });
+  };
+
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    
+    if (trimmed.startsWith("### ")) {
+      flushList(`h3-${idx}`);
+      const content = trimmed.substring(4);
+      renderedElements.push(
+        <h4 key={`h3-${idx}`} className="text-md font-bold text-[#4A6B53] font-serif mt-5 mb-2 border-b border-[#D0CBB7]/30 pb-1">
+          {parseInlineStyles(content)}
+        </h4>
+      );
+    }
+    else if (trimmed.startsWith("## ")) {
+      flushList(`h2-${idx}`);
+      const content = trimmed.substring(3);
+      renderedElements.push(
+        <h3 key={`h2-${idx}`} className="text-lg font-bold text-[#4A6B53] font-serif mt-6 mb-3 border-b border-[#D0CBB7]/30 pb-1">
+          {parseInlineStyles(content)}
+        </h3>
+      );
+    }
+    else if (trimmed.startsWith("# ")) {
+      flushList(`h1-${idx}`);
+      const content = trimmed.substring(2);
+      renderedElements.push(
+        <h2 key={`h1-${idx}`} className="text-xl font-bold text-[#2D312E] font-serif mt-7 mb-4">
+          {parseInlineStyles(content)}
+        </h2>
+      );
+    }
+    else if (trimmed.startsWith("* ") || trimmed.startsWith("- ")) {
+      inList = true;
+      const content = trimmed.substring(2);
+      listItems.push(
+        <li key={`li-${idx}`} className="leading-relaxed">
+          {parseInlineStyles(content)}
+        </li>
+      );
+    }
+    else if (trimmed === "") {
+      flushList(`empty-${idx}`);
+    }
+    else {
+      flushList(`para-${idx}`);
+      renderedElements.push(
+        <p key={`p-${idx}`} className="mb-3 leading-relaxed text-xs md:text-sm text-[#2D312E]">
+          {parseInlineStyles(trimmed)}
+        </p>
+      );
+    }
+  });
+
+  flushList("final");
+  return <div className="space-y-1">{renderedElements}</div>;
+}
+
 interface MemoryExplorerProps {
   activeCaseId: string | null;
   nodes: GraphNode[];
@@ -136,6 +225,51 @@ export default function MemoryExplorer({
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null);
   const [sidebarTab, setSidebarTab] = useState<"details" | "chunks" | "provenance" | "citations">("details");
+
+  // Brief generator states
+  const [isBriefLoading, setIsBriefLoading] = useState(false);
+  const [briefsData, setBriefsData] = useState<{
+    quick_summary: string;
+    standard_summary: string;
+    detailed_brief: string;
+  } | null>(null);
+  const [isBriefModalOpen, setIsBriefModalOpen] = useState(false);
+  const [activeBriefTab, setActiveBriefTab] = useState<"quick" | "standard" | "detailed">("standard");
+
+  // Load briefs automatically if they exist on case select
+  useEffect(() => {
+    if (!activeCaseId) {
+      setBriefsData(null);
+      return;
+    }
+    const loadExistingBriefs = async () => {
+      try {
+        const data = await CogniVerdictAPI.fetchBriefs(activeCaseId);
+        if (data) {
+          setBriefsData(data);
+        } else {
+          setBriefsData(null);
+        }
+      } catch (e) {
+        console.error("Failed to load existing briefs:", e);
+      }
+    };
+    loadExistingBriefs();
+  }, [activeCaseId]);
+
+  const handleTriggerGenerateBrief = async () => {
+    if (!activeCaseId) return;
+    setIsBriefLoading(true);
+    try {
+      const data = await CogniVerdictAPI.generateBriefs(activeCaseId);
+      setBriefsData(data);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to generate briefs from Cognee Cloud metadata.");
+    } finally {
+      setIsBriefLoading(false);
+    }
+  };
 
   // Filtering configurations
   const [nodeTypeFilters, setNodeTypeFilters] = useState<Record<string, boolean>>({
@@ -650,6 +784,21 @@ export default function MemoryExplorer({
             <RefreshCw className="w-3.5 h-3.5" />
             <span className="font-serif">Reset View</span>
           </button>
+
+          {/* Generate Legal Brief Button */}
+          <button
+            onClick={() => {
+              setIsBriefModalOpen(true);
+              if (!briefsData) {
+                handleTriggerGenerateBrief();
+              }
+            }}
+            className="bg-[#4A6B53] hover:bg-[#3D5A45] text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all"
+            title="Open or generate multi-tiered legal brief"
+          >
+            <FileText className="w-3.5 h-3.5 text-white" />
+            <span className="font-serif">Generate Legal Brief</span>
+          </button>
         </div>
 
         {/* React Flow Panel */}
@@ -844,6 +993,133 @@ export default function MemoryExplorer({
           )}
         </div>
       </div>
+
+      {/* Brief Dialog Modal Overlay */}
+      {isBriefModalOpen && (
+        <div className="fixed inset-0 bg-[#2D312E]/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#F4F0E6] border border-[#D0CBB7] rounded-2xl shadow-xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-fade-in">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#D0CBB7] pb-4 px-6 pt-5 bg-[#EFECE1]">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-[#4A6B53]" />
+                <h3 className="font-serif text-lg font-bold text-[#2D312E]">Cognee Cloud Case Briefing</h3>
+              </div>
+              <button 
+                onClick={() => setIsBriefModalOpen(false)}
+                className="text-[#5C615D] hover:text-[#2D312E] p-1 rounded-full hover:bg-black/5"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            {isBriefLoading ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-12 text-center min-h-[350px]">
+                <div className="relative w-16 h-16 mb-4">
+                  <div className="absolute inset-0 border-4 border-[#4A6B53]/20 rounded-full" />
+                  <div className="absolute inset-0 border-4 border-[#4A6B53] border-t-transparent rounded-full animate-spin" />
+                  <FileText className="w-6 h-6 text-[#4A6B53] absolute inset-0 m-auto animate-pulse" />
+                </div>
+                <h4 className="font-semibold text-lg text-[#2D312E] font-serif">Generating Legal Brief</h4>
+                <p className="text-xs text-[#5C615D] max-w-sm mt-1 leading-relaxed">
+                  Querying Cognee Cloud graph database, retrieving document chunks, and synthesizing multi-tiered legal brief templates.
+                </p>
+              </div>
+            ) : !briefsData ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-12 text-center min-h-[350px]">
+                <FileText className="w-12 h-12 text-[#D0CBB7] mb-2" />
+                <h4 className="font-semibold text-md text-[#2D312E] font-serif">No Legal Brief Generated</h4>
+                <p className="text-xs text-[#5C615D] max-w-sm mt-1 mb-4 leading-relaxed">
+                  Generate a multi-tiered legal brief using case metadata and entity graphs extracted in Cognee Cloud.
+                </p>
+                <button
+                  onClick={handleTriggerGenerateBrief}
+                  className="bg-[#4A6B53] hover:bg-[#3D5A45] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Generate Brief
+                </button>
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col overflow-hidden">
+                {/* Tabs Bar */}
+                <div className="flex border-b border-[#D0CBB7] bg-[#EFECE1] px-6 gap-2">
+                  <button
+                    onClick={() => setActiveBriefTab("quick")}
+                    className={`py-3 px-4 font-medium border-b-2 text-xs transition-all font-serif ${
+                      activeBriefTab === "quick"
+                        ? "text-[#4A6B53] border-[#4A6B53] bg-[#F4F0E6]"
+                        : "text-[#5C615D] border-transparent hover:text-[#2D312E]"
+                    }`}
+                  >
+                    Brief Summary (~150 words)
+                  </button>
+                  <button
+                    onClick={() => setActiveBriefTab("standard")}
+                    className={`py-3 px-4 font-medium border-b-2 text-xs transition-all font-serif ${
+                      activeBriefTab === "standard"
+                        ? "text-[#4A6B53] border-[#4A6B53] bg-[#F4F0E6]"
+                        : "text-[#5C615D] border-transparent hover:text-[#2D312E]"
+                    }`}
+                  >
+                    Standard Brief (~400 words)
+                  </button>
+                  <button
+                    onClick={() => setActiveBriefTab("detailed")}
+                    className={`py-3 px-4 font-medium border-b-2 text-xs transition-all font-serif ${
+                      activeBriefTab === "detailed"
+                        ? "text-[#4A6B53] border-[#4A6B53] bg-[#F4F0E6]"
+                        : "text-[#5C615D] border-transparent hover:text-[#2D312E]"
+                    }`}
+                  >
+                    Detailed Analysis (~1000 words)
+                  </button>
+                </div>
+
+                {/* Content Panel */}
+                <div className="flex-1 overflow-y-auto p-6 bg-[#FAF6F0]">
+                  <div className="bg-white border border-[#D0CBB7]/40 rounded-xl p-6 shadow-sm select-text font-serif text-sm text-[#2D312E] leading-relaxed max-h-[50vh] overflow-y-auto">
+                    {activeBriefTab === "quick" && renderMarkdown(briefsData.quick_summary)}
+                    {activeBriefTab === "standard" && renderMarkdown(briefsData.standard_summary)}
+                    {activeBriefTab === "detailed" && renderMarkdown(briefsData.detailed_brief)}
+                  </div>
+                </div>
+
+                {/* Footer Controls */}
+                <div className="border-t border-[#D0CBB7] p-4 px-6 flex justify-between items-center bg-[#EFECE1]">
+                  <button
+                    onClick={handleTriggerGenerateBrief}
+                    className="text-[#4A6B53] hover:text-[#3D5A45] hover:bg-black/5 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Regenerate Brief
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        const txt = activeBriefTab === "quick" ? briefsData.quick_summary :
+                                    activeBriefTab === "standard" ? briefsData.standard_summary : briefsData.detailed_brief;
+                        navigator.clipboard.writeText(txt);
+                        alert("Brief copied to clipboard.");
+                      }}
+                      className="bg-white border border-[#D0CBB7] hover:bg-gray-50 text-[#2D312E] px-4.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all"
+                    >
+                      <Clipboard className="w-3.5 h-3.5 text-[#5C615D]" />
+                      Copy Text
+                    </button>
+                    <button
+                      onClick={() => setIsBriefModalOpen(false)}
+                      className="bg-[#4A6B53] hover:bg-[#3D5A45] text-white px-4.5 py-2 rounded-lg text-xs font-semibold shadow-sm transition-all"
+                    >
+                      Close Brief
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
