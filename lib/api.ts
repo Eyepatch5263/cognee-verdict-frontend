@@ -510,7 +510,13 @@ export class CogniVerdictAPI {
         explanation: "No legal issues identified."
       };
       
-      const c = MOCK_CASES.find(cs => cs.id === datasetId) || MOCK_CASES[0];
+      const c = MOCK_CASES.find(cs => cs.id === datasetId) || {
+        confidenceScore: 0.85,
+        suspectProbability: 0.90,
+        convictionProbability: 0.85,
+        witnesses: [],
+        contradictions: []
+      };
       return {
         reasoning,
         metrics: {
@@ -605,8 +611,8 @@ export class CogniVerdictAPI {
     }
   }
 
-  static async generateBriefs(caseId: string): Promise<any> {
-    const res = await fetch(`${BASE_URL}/cases/${caseId}/briefs/generate`, {
+  static async generateBriefs(caseId: string, bypassCache: boolean = false): Promise<any> {
+    const res = await fetch(`${BASE_URL}/cases/${caseId}/briefs/generate?bypass_cache=${bypassCache}`, {
       method: "POST"
     });
     if (!res.ok) throw new Error("Failed to generate legal briefs");

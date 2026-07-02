@@ -257,11 +257,11 @@ export default function MemoryExplorer({
     loadExistingBriefs();
   }, [activeCaseId]);
 
-  const handleTriggerGenerateBrief = async () => {
+  const handleTriggerGenerateBrief = async (bypassCache: boolean = false) => {
     if (!activeCaseId) return;
     setIsBriefLoading(true);
     try {
-      const data = await CogniVerdictAPI.generateBriefs(activeCaseId);
+      const data = await CogniVerdictAPI.generateBriefs(activeCaseId, bypassCache);
       setBriefsData(data);
     } catch (err) {
       console.error(err);
@@ -1001,7 +1001,6 @@ export default function MemoryExplorer({
             {/* Header */}
             <div className="flex items-center justify-between border-b border-[#D0CBB7] pb-4 px-6 pt-5 bg-[#EFECE1]">
               <div className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-[#4A6B53]" />
                 <h3 className="font-serif text-lg font-bold text-[#2D312E]">Cognee Cloud Case Briefing</h3>
               </div>
               <button 
@@ -1033,7 +1032,7 @@ export default function MemoryExplorer({
                   Generate a multi-tiered legal brief using case metadata and entity graphs extracted in Cognee Cloud.
                 </p>
                 <button
-                  onClick={handleTriggerGenerateBrief}
+                  onClick={() => handleTriggerGenerateBrief(false)}
                   className="bg-[#4A6B53] hover:bg-[#3D5A45] text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -1088,7 +1087,7 @@ export default function MemoryExplorer({
                 {/* Footer Controls */}
                 <div className="border-t border-[#D0CBB7] p-4 px-6 flex justify-between items-center bg-[#EFECE1]">
                   <button
-                    onClick={handleTriggerGenerateBrief}
+                    onClick={() => handleTriggerGenerateBrief(true)}
                     className="text-[#4A6B53] hover:text-[#3D5A45] hover:bg-black/5 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />

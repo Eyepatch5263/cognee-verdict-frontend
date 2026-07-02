@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import Sidebar from "./components/Sidebar";
 import CaseLibrary from "./components/CaseLibrary";
 import MemoryExplorer from "./components/MemoryExplorer";
@@ -19,6 +19,59 @@ import {
 } from "@/lib/api";
 import { Scale } from "lucide-react";
 
+// Native IndexedDB cache utilities for smooth, offline-first graph loading
+const DB_NAME = "CogneeVerdictDB";
+const STORE_NAME = "case_cache";
+const DB_VERSION = 1;
+
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject("Window is undefined");
+      return;
+    }
+    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = (event: any) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "caseId" });
+      }
+    };
+  });
+}
+
+async function getCachedCase(caseId: string): Promise<any | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, "readonly");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(caseId);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result || null);
+    });
+  } catch (err) {
+    console.error("IndexedDB get error:", err);
+    return null;
+  }
+}
+
+async function saveCachedCase(caseId: string, data: any): Promise<void> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.put({ caseId, ...data, timestamp: Date.now() });
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    });
+  } catch (err) {
+    console.error("IndexedDB put error:", err);
+  }
+}
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("library");
@@ -71,6 +124,89 @@ export default function Home() {
     init();
   }, []);
 
+  // Helper to fetch and cache case details (graph, chunks, citations)
+  const fetchAndCacheCaseDetails = useCallback(async (caseId: string, version: string, updateLoadingState: boolean) => {
+    if (updateLoadingState) {
+      setIsAnalysisLoading(true);
+    }
+    try {
+      let nodes: any[] = [];
+      let edges: any[] = [];
+      let chunks: any[] = [];
+      let provenance: any = null;
+      let citations: any[] = [];
+
+      try {
+        const graph = await CogniVerdictAPI.getCaseGraph(caseId);
+        nodes = graph?.nodes || [];
+        edges = graph?.edges || [];
+      } catch (err) {
+        console.error("Failed to load case graph:", err);
+      }
+
+      try {
+        chunks = await CogniVerdictAPI.getCaseChunks(caseId) || [];
+      } catch (err) {
+        console.error("Failed to load case chunks:", err);
+      }
+
+      try {
+        provenance = await CogniVerdictAPI.getCaseProvenance(caseId) || null;
+      } catch (err) {
+        console.error("Failed to load case provenance:", err);
+      }
+
+      try {
+        citations = await CogniVerdictAPI.getCaseCitations(caseId) || [];
+      } catch (err) {
+        console.error("Failed to load case citations:", err);
+      }
+
+      // Render to UI
+      setGraphNodes(nodes);
+      setGraphEdges(edges);
+      setCaseChunks(chunks);
+      setCaseProvenance(provenance);
+      setCaseCitations(citations);
+
+      // Save/Update in IndexedDB cache
+      await saveCachedCase(caseId, {
+        nodes,
+        edges,
+        chunks,
+        provenance,
+        citations,
+        version
+      });
+
+      // Fetch and update case analysis in background
+      try {
+        const analysis = await CogniVerdictAPI.getCaseAnalysis(caseId);
+        setCases(prev => prev.map(c => {
+          if (c.id === caseId) {
+            return {
+              ...c,
+              confidenceScore: analysis.ui_metrics.confidenceScore,
+              suspectProbability: analysis.ui_metrics.suspectProbability,
+              convictionProbability: analysis.ui_metrics.convictionProbability,
+              witnesses: analysis.ui_metrics.witnesses,
+              contradictions: analysis.ui_metrics.contradictions,
+              feedbacks: analysis.feedbacks,
+              status: "completed"
+            };
+          }
+          return c;
+        }));
+      } catch (err) {
+        console.error("Failed to load case analysis:", err);
+      }
+    } finally {
+      if (updateLoadingState) {
+        setIsAnalysisLoading(false);
+      }
+    }
+  }, []);
+
   // Fetch active case information when selected case changes
   useEffect(() => {
     if (!activeCaseId) {
@@ -88,69 +224,42 @@ export default function Home() {
       if (isLive && activeCaseStatus !== "completed") {
         return;
       }
-      setIsAnalysisLoading(true);
+
+      // Determine active case version/hash from the cases list
+      const currentCase = cases.find(c => c.id === caseId);
+      const currentVersion = currentCase 
+        ? `${currentCase.entitiesCount}-${currentCase.relationshipsCount}-${currentCase.status}`
+        : "";
+
+      // 1. Check IndexedDB
+      let cached = null;
       try {
-        try {
-          const graph = await CogniVerdictAPI.getCaseGraph(caseId);
-          setGraphNodes(graph?.nodes || []);
-          setGraphEdges(graph?.edges || []);
-        } catch (err) {
-          console.error("Failed to load case graph:", err);
-          setGraphNodes([]);
-          setGraphEdges([]);
-        }
+        cached = await getCachedCase(caseId);
+      } catch (err) {
+        console.error("Failed to read from IndexedDB cache:", err);
+      }
 
-        try {
-          const chunks = await CogniVerdictAPI.getCaseChunks(caseId);
-          setCaseChunks(chunks || []);
-        } catch (err) {
-          console.error("Failed to load case chunks:", err);
-          setCaseChunks([]);
-        }
+      if (cached) {
+        // HIT -> Render instantly!
+        setGraphNodes(cached.nodes || []);
+        setGraphEdges(cached.edges || []);
+        setCaseChunks(cached.chunks || []);
+        setCaseProvenance(cached.provenance || null);
+        setCaseCitations(cached.citations || []);
 
-        try {
-          const prov = await CogniVerdictAPI.getCaseProvenance(caseId);
-          setCaseProvenance(prov || null);
-        } catch (err) {
-          console.error("Failed to load case provenance:", err);
-          setCaseProvenance(null);
+        // Background version check
+        if (cached.version !== currentVersion) {
+          // Version changed -> refetch + update cache + UI in the background
+          fetchAndCacheCaseDetails(caseId, currentVersion, false);
         }
-
-        try {
-          const cites = await CogniVerdictAPI.getCaseCitations(caseId);
-          setCaseCitations(cites || []);
-        } catch (err) {
-          console.error("Failed to load case citations:", err);
-          setCaseCitations([]);
-        }
-
-        try {
-          const analysis = await CogniVerdictAPI.getCaseAnalysis(caseId);
-          setCases(prev => prev.map(c => {
-            if (c.id === caseId) {
-              return {
-                ...c,
-                confidenceScore: analysis.ui_metrics.confidenceScore,
-                suspectProbability: analysis.ui_metrics.suspectProbability,
-                convictionProbability: analysis.ui_metrics.convictionProbability,
-                witnesses: analysis.ui_metrics.witnesses,
-                contradictions: analysis.ui_metrics.contradictions,
-                feedbacks: analysis.feedbacks,
-                status: "completed"
-              };
-            }
-            return c;
-          }));
-        } catch (err) {
-          console.error("Failed to load case analysis:", err);
-        }
-      } finally {
-        setIsAnalysisLoading(false);
+      } else {
+        // MISS -> fetch from Cognee -> cache -> render
+        await fetchAndCacheCaseDetails(caseId, currentVersion, true);
       }
     }
 
     loadCaseDetails();
-  }, [activeCaseId, activeCaseStatus, isLive]);
+  }, [activeCaseId, activeCaseStatus, isLive, fetchAndCacheCaseDetails]);
 
   // Poll status for cases in "processing" state
   useEffect(() => {
