@@ -61,6 +61,18 @@ CogniVerdict uses a deterministic scoring engine that processes the LLM-extracte
 
 ### 6. Benchmarking Layer
 To prevent the engine from overfitting to specific cases, CogniVerdict features a continuous evaluation suite that measures performance across multiple test dossiers.
+
+#### How to Benchmark a Case:
+1. **Ingest the Case**:
+   - Locate or download the target case folder (e.g., `CASE_010`) from the GitHub repository's `cases` directory.
+   - Open the upload interface in the platform, and upload **all documents** located under the `documents/` folder of that specific case.
+   - **Crucial**: Adhere strictly to the naming convention. When uploading, specify the case name to exactly match the case ID (e.g., name it `case_010` or `CASE_010`).
+2. **Run the Benchmark**:
+   - Wait for the upload and Cognee ingestion processing to finish (status shows `COMPLETED`).
+   - Go to the **Benchmarking Panel** on the UI.
+   - Select the case name (e.g., `CASE_010`) from the benchmarking dropdown list.
+   - Click **Run Case Benchmark** to execute the continuous evaluation and generate performance metrics.
+
 - **Evaluation Metrics**:
   - **Suspect Accuracy**: Validates if the correct suspect is identified.
   - **Retrieval Recall@k**: Measures the percentage of ground-truth case facts present in retrieved chunks.
