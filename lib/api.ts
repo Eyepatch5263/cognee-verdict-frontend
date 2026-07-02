@@ -158,7 +158,10 @@ export const MOCK_CHUNKS: Record<string, RecallResult[]> = {
 // -------------------------------------------------------------
 // API Client Implementation
 // -------------------------------------------------------------
-export const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const BASE_URL = (() => {
+  const url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  return url === "/" ? "" : url.replace(/\/$/, "");
+})();
 
 export class CogniVerdictAPI {
   private static isBackendAvailable = false;
