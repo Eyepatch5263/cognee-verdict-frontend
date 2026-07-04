@@ -6,22 +6,11 @@ The platform provides a complete end-to-end pipeline—from raw case text ingest
 
 ---
 
-## Platform Architecture & Data Flow
+## System Architecture & Data Flow
 
 Below is the conceptual flow of the CogniVerdict pipeline:
 
-```mermaid
-graph TD
-    A[Raw Case Documents] -->|Ingested & Chunked| B(Cognee Cloud API)
-    B -->|Entity-Relationship Extraction| C[Knowledge Graph]
-    C -->|UUID to Name Resolution| D[LLM Reasoning Layer]
-    D -->|Contradictions, Motives & Biases| E[Analysis Cache]
-    E -->|Case Library & Summaries| F[Frontend Case Portal]
-    F -->|Interactive Advisory Chat| G[Advisory Layer]
-    F -->|Expert Overrides & Adjustments| H[Feedback Panel]
-    H -->|Dynamic Recalculation| I[Scoring Engine]
-    I -->|Benchmarked Results| J[Benchmarking Layer]
-```
+![architecture_diagram](./public/system-architecture.png)
 
 ---
 
@@ -40,11 +29,21 @@ graph TD
   - **Detailed Brief**: A comprehensive 1000-word analysis with deep breakdowns of evidence, motives, and contradictions.
 - **Interactive Graph Visualizer**: A custom D3.js force-directed mindmap showing nodes and relationships directly from Cognee Cloud.
 
-### 3. Advisory Chat
+### 3. Analysis Engine & Reasoning Pipeline
+![Analysis Engine Architecture](./public/analysis_engine_architecture.png)
+CogniVerdict implements a parallelized multi-agent reasoning architecture that evaluates case facts and graph topologies:
+- **Parallel LLM Orchestration**: Runs contradiction analysis, motive extraction, and witness bias detection concurrently using Python's `asyncio.gather` pipeline. This architecture reduces processing latency from ~45 seconds to under 15 seconds, preventing cloud load-balancer and gateway timeouts.
+- **Explainable Evidence Mapping**: Links raw vector chunks back to the original documents (e.g. `WS-005.json`). When the dashboard displays motive or timeline contradictions, investigators can click to view the actual source text, eliminating opaque "chunk index" references.
+- **Core Reasoning Agents**:
+  * **Contradiction Detection**: Cross-references timelines, statement changes, and physical logs (e.g. CCTV vs testimony) to flag logical inconsistencies.
+  * **Motive Detection**: Deduces driving incentives, emotional drivers, and revenge indicators for each key subject.
+  * **Bias & Credibility Extraction**: Detects witness self-interests, coercion flags, and familial relations.
+
+### 4. Advisory Chat
 - **Contextual QA**: Allows users to chat with an AI legal assistant regarding the facts of the active case.
 - **Semantic Retrieval**: Merges graph entities and relationships with chunk-retrieval vectors to build an augmented LLM context, ensuring answers are grounded directly in the case files.
 
-### 4. Feedback Panel (Expert Overrides)
+### 5. Feedback Panel (Expert Overrides)
 - **Calibrating the Engine**: Since LLMs can misinterpret legal nuances, the Feedback Panel allows senior human attorneys to override automatic scores and entities.
 - **Adjustable Parameters**:
   - Add/modify suspect names.
@@ -53,13 +52,16 @@ graph TD
   - Correct contradiction or motive annotations.
 - **Real-Time Recalculation**: Adjustments submitted to the panel instantly trigger a recalculation in the scoring pipeline, immediately updating conviction probabilities on the dashboard.
 
-### 5. Scoring Engine & Conviction Accuracy Pipeline
+### 6. Scoring Engine & Conviction Accuracy Pipeline
 CogniVerdict uses a deterministic scoring engine that processes the LLM-extracted legal signals combined with human feedback.
 - **Witness Credibility**: Computes a score based on statement consistency, independence (deducting penalties for biases like familial relations, bribery, or coercion), and any expert overrides.
 - **Prosecution Strength**: Calculates a weighted score of all incriminating evidence (factoring in admissibility and witness credibility).
 - **Conviction Probability**: Combines prosecution strength with suspect-specific motives and overall case contradictions to produce a final conviction likelihood percentage.
 
-### 6. Benchmarking Layer
+### 7. Benchmarking Layer
+
+![Benchmark Architecture](./public/benchmark-architecture.png)
+
 To prevent the engine from overfitting to specific cases, CogniVerdict features a continuous evaluation suite that measures performance across multiple test dossiers.
 
 #### How to Benchmark a Case:
@@ -80,7 +82,7 @@ To prevent the engine from overfitting to specific cases, CogniVerdict features 
   - **Witness Accuracy**: Validates correct witness identification.
   - **Conviction MAE (Mean Absolute Error)**: Measures the drift (in percentage points) between the calculated conviction probability and the actual bench-marked verdict. Target accuracy is **< 10.0pp MAE**.
 
-### 7. Memory Layer Integration (Cognee Core API)
+### 8. Memory Layer Integration (Cognee Core API)
 CogniVerdict uses Cognee Cloud as its primary long-term memory layer, calling its endpoints to ingest case files, retrieve factual context, refine graph structures, and prune invalid statements.
 
 - **`remember()` (via `/api/v1/remember`)**:
