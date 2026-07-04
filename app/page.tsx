@@ -1,824 +1,301 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
-import Sidebar from "./components/Sidebar";
-import CaseLibrary from "./components/CaseLibrary";
-import MemoryExplorer from "./components/MemoryExplorer";
-import InteractiveMindmap from "./components/InteractiveMindmap";
-import AdvisoryChat, { ChatMessage } from "./components/AdvisoryChat";
-import AnalysisDashboard from "./components/AnalysisDashboard";
-import FeedbackPanel from "./components/FeedbackPanel";
-import BenchmarkPanel from "./components/BenchmarkPanel";
-import { 
-  Case, 
-  CogniVerdictAPI, 
-  MOCK_CASES, 
-  GraphNode, 
-  GraphEdge, 
-  RecallResult 
-} from "@/lib/api";
-import { Scale } from "lucide-react";
+import Link from "next/link";
+import {
+  Scale,
+  Brain,
+  Cpu,
+  Database,
+  Eye,
+  ShieldAlert,
+  GitBranch,
+  ArrowRight,
+  CheckCircle2
+} from "lucide-react";
 
-// Native IndexedDB cache utilities for smooth, offline-first graph loading
-const DB_NAME = "CogneeVerdictDB";
-const STORE_NAME = "case_cache";
-const DB_VERSION = 1;
-
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined") {
-      reject("Window is undefined");
-      return;
-    }
-    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = (event: any) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: "caseId" });
-      }
-    };
-  });
-}
-
-async function getCachedCase(caseId: string): Promise<any | null> {
-  try {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, "readonly");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(caseId);
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve(request.result || null);
-    });
-  } catch (err) {
-    console.error("IndexedDB get error:", err);
-    return null;
-  }
-}
-
-async function saveCachedCase(caseId: string, data: any): Promise<void> {
-  try {
-    const db = await openDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, "readwrite");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.put({ caseId, ...data, timestamp: Date.now() });
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => resolve();
-    });
-  } catch (err) {
-    console.error("IndexedDB put error:", err);
-  }
-}
-
-export default function Home() {
-  const [activeTab, setActiveTab] = useState("library");
-  const [isLive, setIsLive] = useState(false);
-  const [cases, setCases] = useState<Case[]>([]);
-  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
-
-  // Case details states
-  const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
-  const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
-  const [caseChunks, setCaseChunks] = useState<RecallResult[]>([]);
-  const [caseProvenance, setCaseProvenance] = useState<any>(null);
-  const [caseCitations, setCaseCitations] = useState<any[]>([]);
-
-  // Get active case item details
-  const activeCase = cases.find(c => c.id === activeCaseId) || null;
-  const activeCaseStatus = activeCase?.status;
-
-  // Chat states
-  const [chatHistory, setChatHistory] = useState<Record<string, ChatMessage[]>>({});
-  const [isSendingChat, setIsSendingChat] = useState(false);
-
-  // Check health and set mode on load
-  useEffect(() => {
-    async function init() {
-      try {
-        const healthy = await CogniVerdictAPI.checkBackendHealth();
-        setIsLive(healthy);
-        
-        if (healthy) {
-          console.log("Connected to live CogniVerdict FastAPI backend.");
-          try {
-            const list = await CogniVerdictAPI.fetchCases();
-            setCases(list);
-            setActiveCaseId(null);
-          } catch (err) {
-            console.error("Failed to load active case list from backend:", err);
-          }
-        } else {
-          console.log("Running in offline Demo Mode (Mock Cognee memory active).");
-          setCases(MOCK_CASES);
-          setActiveCaseId(MOCK_CASES.length > 0 ? MOCK_CASES[0].id : null);
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    init();
-  }, []);
-
-  // Helper to fetch and cache case details (graph, chunks, citations)
-  const fetchAndCacheCaseDetails = useCallback(async (caseId: string, version: string, updateLoadingState: boolean) => {
-    if (updateLoadingState) {
-      setIsAnalysisLoading(true);
-    }
-    try {
-      let nodes: any[] = [];
-      let edges: any[] = [];
-      let chunks: any[] = [];
-      let provenance: any = null;
-      let citations: any[] = [];
-
-      try {
-        const graph = await CogniVerdictAPI.getCaseGraph(caseId);
-        nodes = graph?.nodes || [];
-        edges = graph?.edges || [];
-      } catch (err) {
-        console.error("Failed to load case graph:", err);
-      }
-
-      try {
-        chunks = await CogniVerdictAPI.getCaseChunks(caseId) || [];
-      } catch (err) {
-        console.error("Failed to load case chunks:", err);
-      }
-
-      try {
-        provenance = await CogniVerdictAPI.getCaseProvenance(caseId) || null;
-      } catch (err) {
-        console.error("Failed to load case provenance:", err);
-      }
-
-      try {
-        citations = await CogniVerdictAPI.getCaseCitations(caseId) || [];
-      } catch (err) {
-        console.error("Failed to load case citations:", err);
-      }
-
-      // Render to UI
-      setGraphNodes(nodes);
-      setGraphEdges(edges);
-      setCaseChunks(chunks);
-      setCaseProvenance(provenance);
-      setCaseCitations(citations);
-
-      // Save/Update in IndexedDB cache
-      await saveCachedCase(caseId, {
-        nodes,
-        edges,
-        chunks,
-        provenance,
-        citations,
-        version
-      });
-
-      // Fetch and update case analysis in background
-      try {
-        const analysis = await CogniVerdictAPI.getCaseAnalysis(caseId);
-        setCases(prev => prev.map(c => {
-          if (c.id === caseId) {
-            return {
-              ...c,
-              confidenceScore: analysis.ui_metrics.confidenceScore,
-              suspectProbability: analysis.ui_metrics.suspectProbability,
-              convictionProbability: analysis.ui_metrics.convictionProbability,
-              witnesses: analysis.ui_metrics.witnesses,
-              contradictions: analysis.ui_metrics.contradictions,
-              feedbacks: analysis.feedbacks,
-              status: "completed"
-            };
-          }
-          return c;
-        }));
-      } catch (err) {
-        console.error("Failed to load case analysis:", err);
-      }
-    } finally {
-      if (updateLoadingState) {
-        setIsAnalysisLoading(false);
-      }
-    }
-  }, []);
-
-  // Fetch active case information when selected case changes
-  useEffect(() => {
-    if (!activeCaseId) {
-      setGraphNodes([]);
-      setGraphEdges([]);
-      setCaseChunks([]);
-      setCaseProvenance(null);
-      setCaseCitations([]);
-      return;
-    }
-
-    const caseId = activeCaseId;
-
-    async function loadCaseDetails() {
-      if (isLive && activeCaseStatus !== "completed") {
-        return;
-      }
-
-      // Determine active case version/hash from the cases list
-      const currentCase = cases.find(c => c.id === caseId);
-      const currentVersion = currentCase 
-        ? `${currentCase.entitiesCount}-${currentCase.relationshipsCount}-${currentCase.status}`
-        : "";
-
-      // 1. Check IndexedDB
-      let cached = null;
-      try {
-        cached = await getCachedCase(caseId);
-      } catch (err) {
-        console.error("Failed to read from IndexedDB cache:", err);
-      }
-
-      if (cached) {
-        // HIT -> Render instantly!
-        setGraphNodes(cached.nodes || []);
-        setGraphEdges(cached.edges || []);
-        setCaseChunks(cached.chunks || []);
-        setCaseProvenance(cached.provenance || null);
-        setCaseCitations(cached.citations || []);
-
-        // Background version check
-        if (cached.version !== currentVersion) {
-          // Version changed -> refetch + update cache + UI in the background
-          fetchAndCacheCaseDetails(caseId, currentVersion, false);
-        }
-      } else {
-        // MISS -> fetch from Cognee -> cache -> render
-        await fetchAndCacheCaseDetails(caseId, currentVersion, true);
-      }
-    }
-
-    loadCaseDetails();
-  }, [activeCaseId, activeCaseStatus, isLive, fetchAndCacheCaseDetails]);
-
-  // Poll status for cases in "processing" state
-  useEffect(() => {
-    const processingCases = cases.filter(c => c.status === "processing" || c.status === "pending");
-    if (processingCases.length === 0 || !isLive) return;
-
-    const intervalId = setInterval(async () => {
-      for (const c of processingCases) {
-        try {
-          const statusRes = await CogniVerdictAPI.getCaseStatus(c.id);
-          const rawStatus = statusRes.status.toUpperCase();
-          
-          let nextStatus: "completed" | "processing" | "pending" | "failed" = "processing";
-          
-          if (rawStatus === "DATASET_PROCESSING_COMPLETED") {
-            nextStatus = "completed";
-          } else if (rawStatus === "DATASET_PROCESSING_ERRORED" || rawStatus === "FAILED" || rawStatus === "ERROR") {
-            nextStatus = "failed";
-          } else if (rawStatus === "DATASET_PROCESSING_STARTED" || rawStatus === "PROCESSING") {
-            nextStatus = "processing";
-          }
-          
-          if (nextStatus !== c.status) {
-            // Update status in the state
-            setCases(prev => prev.map(item => {
-              if (item.id === c.id) {
-                return { ...item, status: nextStatus };
-              }
-              return item;
-            }));
-
-            // If it completed, trigger the analysis fetch to fill in details (like metrics, confidence, etc.)
-            if (nextStatus === "completed") {
-              try {
-                const analysis = await CogniVerdictAPI.getCaseAnalysis(c.id);
-                setCases(prev => prev.map(item => {
-                  if (item.id === c.id) {
-                    return {
-                      ...item,
-                      confidenceScore: analysis.ui_metrics.confidenceScore,
-                      suspectProbability: analysis.ui_metrics.suspectProbability,
-                      convictionProbability: analysis.ui_metrics.convictionProbability,
-                      witnesses: analysis.ui_metrics.witnesses,
-                      contradictions: analysis.ui_metrics.contradictions,
-                      feedbacks: analysis.feedbacks,
-                      status: "completed"
-                    };
-                  }
-                  return item;
-                }));
-              } catch (analysisErr) {
-                console.error("Failed to load analysis for completed case:", analysisErr);
-              }
-            }
-          }
-        } catch (err) {
-          console.error(`Failed to poll status for case ${c.id}:`, err);
-        }
-      }
-    }, 1000); // 1000ms polling interval
-
-    return () => clearInterval(intervalId);
-  }, [cases, isLive]);
-
-  // Handle case selection
-  const handleSelectCase = (id: string) => {
-    setActiveCaseId(id);
-    // Switch to Memory Explorer automatically when case is selected
-    setActiveTab("explorer");
-  };
-
-  // Handle file upload pipeline execution for a unified collection
-  const handleUploadCollection = async (files: File[], collectionName: string) => {
-    if (files.length === 0) return;
-
-    // Ingest all files collectively in a single API request
-    const uploadRes = await CogniVerdictAPI.uploadCollection(files, collectionName);
-    const newId = uploadRes.dataset_id;
-    
-    // Refresh cases list
-    const healthy = await CogniVerdictAPI.checkBackendHealth();
-    setIsLive(healthy);
-    
-    const totalSize = files.reduce((acc, f) => acc + f.size, 0);
-    const filenamesStr = files.map(f => f.name).join(", ");
-    
-    if (!healthy) {
-      setCases([...MOCK_CASES]);
-      setActiveCaseId(newId);
-    } else {
-      // In live mode: construct a temporary unified case card
-      const newCaseItem: Case = {
-        id: newId,
-        name: collectionName,
-        filename: files.length === 1 ? files[0].name : `${files.length} files (${filenamesStr})`,
-        uploadedAt: new Date().toISOString(),
-        status: "processing",
-        sizeBytes: totalSize,
-        entitiesCount: 0,
-        relationshipsCount: 0,
-        confidenceScore: 0,
-        suspectProbability: 0,
-        convictionProbability: 0,
-        witnesses: [],
-        contradictions: []
-      };
-      
-      setCases(prev => {
-        const exists = prev.some(c => c.id === newId);
-        if (exists) {
-          return prev.map(c => c.id === newId ? { ...c, status: "processing", sizeBytes: totalSize, filename: newCaseItem.filename } : c);
-        }
-        return [newCaseItem, ...prev];
-      });
-      setActiveCaseId(newId);
-    }
-  };
-
-  // Handle Chat advisory messaging
-  const handleSendChatMessage = async (query: string) => {
-    if (!activeCaseId) return;
-
-    // 1. Create User Message
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      sender: "user",
-      text: query
-    };
-
-    const currentChat = chatHistory[activeCaseId] || [];
-    const updatedChat = [...currentChat, userMsg];
-    setChatHistory(prev => ({
-      ...prev,
-      [activeCaseId]: updatedChat
-    }));
-    setIsSendingChat(true);
-
-    try {
-      // 2. Fetch memory from Cognee recall
-      const recallRes = await CogniVerdictAPI.recallMemory(activeCaseId, query);
-      
-      // 3. Format AI Response
-      let aiText = "No matching memory records could be retrieved for this query.";
-      let evidenceCards: any[] = [];
-      let citations: string[] = [];
-
-      if (recallRes && recallRes.length > 0) {
-        aiText = recallRes[0].text;
-        evidenceCards = recallRes.map(r => ({
-          title: r.source.replace(/_/g, " ").toUpperCase(),
-          desc: r.text.slice(0, 160) + (r.text.length > 160 ? "..." : ""),
-          type: r.source.includes("witness") || r.source.includes("testimony") ? "testimony" : "evidence",
-          score: r.score ? Math.round(r.score * 100) : undefined
-        }));
-        citations = recallRes[0].citations || [];
-      }
-
-      const aiMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: "ai",
-        text: aiText,
-        evidenceCards,
-        citations
-      };
-
-      setChatHistory(prev => ({
-        ...prev,
-        [activeCaseId]: [...updatedChat, aiMsg]
-      }));
-    } catch (err: any) {
-      const errorMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: "ai",
-        text: `Error calling Cognee Cloud: ${err.message || "Request timed out."}`
-      };
-      setChatHistory(prev => ({
-        ...prev,
-        [activeCaseId]: [...updatedChat, errorMsg]
-      }));
-    } finally {
-      setIsSendingChat(false);
-    }
-  };
-
-  // Dynamically extract evidence nodes from graph to provide to FeedbackPanel
-  const evidenceNodes = useMemo(() => {
-    // 1. Identify all document / source nodes in the graph
-    const docNodesMap = new Map<string, string>(); // maps id -> document label (e.g. "WS-001")
-    
-    graphNodes.forEach(n => {
-      const typeLower = (n.type || "").toLowerCase();
-      const labelLower = (n.label || "").toLowerCase();
-      
-      const isDoc = ["textdocument", "document", "file", "ws-", "er-", "ir-", "cctv-", "report"].some(
-        x => typeLower.includes(x) || labelLower.includes(x)
-      ) || labelLower.startsWith("ws-") || labelLower.startsWith("er-") || labelLower.startsWith("ir-") || labelLower.startsWith("cctv-");
-      
-      const isChunk = labelLower.includes("chunk");
-
-      if (isDoc && !isChunk) {
-        docNodesMap.set(n.id, n.label);
-      }
-    });
-
-    // 2. Extract actual evidence entities and map them to their document source
-    const seenKeys = new Set<string>();
-    const nodesList: { id: string; label: string }[] = [];
-
-    graphNodes.forEach(n => {
-      const typeLower = (n.type || "").toLowerCase();
-      const labelLower = (n.label || "").toLowerCase();
-
-      // Exclude document nodes or chunk nodes themselves
-      const isDocOrChunk = ["chunk", "summary", "textdocument", "document", "file", "metadata", "dataset", "cases"].some(
-        x => typeLower.includes(x) || labelLower.includes(x)
-      ) || labelLower.startsWith("ws-") || labelLower.startsWith("er-") || labelLower.startsWith("ir-") || labelLower.startsWith("cctv-");
-
-      if (isDocOrChunk) return;
-
-      // Include valid evidence types or labels
-      const isEvNode = ["evidence", "cctv", "dna", "log", "statement", "testimony", "asset", "event", "knife", "phone", "sedan", "canister", "report", "weapon", "fingerprint"].some(
-        x => typeLower.includes(x) || labelLower.includes(x)
-      );
-
-      if (isEvNode) {
-        // Trace to find which document node this evidence is connected to
-        let sourceDocLabel = "";
-        
-        // Find connected edges
-        const connectedEdges = graphEdges.filter(e => e.source === n.id || e.target === n.id);
-        
-        // Try direct edge to document first
-        for (const edge of connectedEdges) {
-          const otherId = edge.source === n.id ? edge.target : edge.source;
-          if (docNodesMap.has(otherId)) {
-            sourceDocLabel = docNodesMap.get(otherId) || "";
-            break;
-          }
-        }
-        
-        // If not found directly, try finding edge to a chunk first, and then chunk to document
-        if (!sourceDocLabel) {
-          for (const edge of connectedEdges) {
-            const otherId = edge.source === n.id ? edge.target : edge.source;
-            const otherNode = graphNodes.find(gn => gn.id === otherId);
-            if (otherNode && (otherNode.label || "").toLowerCase().includes("chunk")) {
-              // Find edges connecting this chunk to a document
-              const chunkEdges = graphEdges.filter(e => e.source === otherId || e.target === otherId);
-              for (const ce of chunkEdges) {
-                const docId = ce.source === otherId ? ce.target : ce.source;
-                if (docNodesMap.has(docId)) {
-                  sourceDocLabel = docNodesMap.get(docId) || "";
-                  break;
-                }
-              }
-            }
-            if (sourceDocLabel) break;
-          }
-        }
-
-        // Format clean name for the evidence
-        let cleanLabel = n.label;
-        if (cleanLabel.toLowerCase().includes("_chunk_")) {
-          cleanLabel = cleanLabel.split("_chunk_")[0];
-        }
-        if (cleanLabel.includes(".")) {
-          cleanLabel = cleanLabel.split(".")[0];
-        }
-        cleanLabel = cleanLabel.replace(/([A-Z])/g, " $1");
-        cleanLabel = cleanLabel.replace(/[_-]/g, " ").trim();
-        cleanLabel = cleanLabel.split(" ")
-          .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
-
-        // Format document label cleanly (e.g. "WS-001" -> "WS-001")
-        let cleanDoc = sourceDocLabel;
-        if (cleanDoc) {
-          cleanDoc = cleanDoc.replace(/[_-]/g, " ").trim();
-        }
-
-        let displayLabel = cleanLabel;
-        if (cleanDoc) {
-          displayLabel = `${cleanLabel} (from ${cleanDoc})`;
-        } else {
-          // Fallback to properties if any
-          const props = n.properties || {};
-          const propDoc = props.source || props.document || props.file;
-          if (propDoc) {
-            displayLabel = `${cleanLabel} (from ${propDoc})`;
-          }
-        }
-
-        const key = displayLabel.toLowerCase();
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          nodesList.push({ id: n.id, label: displayLabel });
-        }
-      }
-    });
-
-    if (nodesList.length === 0) {
-      return [
-        { id: "evidence-forensic", label: "Forensic Laboratory Report (from ER-001)" },
-        { id: "evidence-cctv", label: "CCTV Digital Access Logs (from CCTV-002)" },
-        { id: "evidence-dna", label: "DNA Fingerprint Analysis (from ER-002)" }
-      ];
-    }
-
-    return nodesList;
-  }, [graphNodes, graphEdges]);
-
-  // Handle feedback override submission and recomputation
-  const handleApplyFeedback = async (feedbacks: any[]) => {
-    if (!activeCaseId) return;
-    setIsAnalysisLoading(true);
-    try {
-      const updatedAnalysis = await CogniVerdictAPI.submitCaseFeedback(activeCaseId, feedbacks);
-      
-      // Update local state with the recomputed response
-      setCases(prev => prev.map(c => {
-        if (c.id === activeCaseId) {
-          return {
-            ...c,
-            confidenceScore: updatedAnalysis.ui_metrics.confidenceScore,
-            suspectProbability: updatedAnalysis.ui_metrics.suspectProbability,
-            convictionProbability: updatedAnalysis.ui_metrics.convictionProbability,
-            witnesses: updatedAnalysis.ui_metrics.witnesses,
-            contradictions: updatedAnalysis.ui_metrics.contradictions,
-            feedbacks: updatedAnalysis.feedbacks
-          };
-        }
-        return c;
-      }));
-
-      // Reload case graph as Cognee might have pruned nodes (on forget_memory)
-      const graph = await CogniVerdictAPI.getCaseGraph(activeCaseId);
-      setGraphNodes(graph?.nodes || []);
-      setGraphEdges(graph?.edges || []);
-      
-    } catch (err: any) {
-      console.error("Feedback pipeline execution failed:", err);
-      throw new Error(err.message || "Pipeline recomputation error.");
-    } finally {
-      setIsAnalysisLoading(false);
-    }
-  };
-
-  // Handle case analysis trigger
-  const handleAnalyzeCase = async (caseId: string) => {
-    setIsAnalysisLoading(true);
-    try {
-      const analysis = await CogniVerdictAPI.getCaseAnalysis(caseId, true);
-      setCases(prev => prev.map(c => {
-        if (c.id === caseId) {
-          return {
-            ...c,
-            confidenceScore: analysis.ui_metrics.confidenceScore,
-            suspectProbability: analysis.ui_metrics.suspectProbability,
-            convictionProbability: analysis.ui_metrics.convictionProbability,
-            witnesses: analysis.ui_metrics.witnesses,
-            contradictions: analysis.ui_metrics.contradictions,
-            feedbacks: analysis.feedbacks,
-            status: "completed"
-          };
-        }
-        return c;
-      }));
-    } catch (err) {
-      console.error("Failed to run case analysis:", err);
-      throw err;
-    } finally {
-      setIsAnalysisLoading(false);
-    }
-  };
-
-  // Handle improve memory (memify)
-  const handleImproveMemory = async () => {
-    if (!activeCaseId) return;
-    await CogniVerdictAPI.improveMemory(activeCaseId);
-    
-    // Reload case data
-    const graph = await CogniVerdictAPI.getCaseGraph(activeCaseId);
-    setGraphNodes(graph?.nodes || []);
-    setGraphEdges(graph?.edges || []);
-    
-    // Reload case analysis to reflect new reasoning and score updates
-    try {
-      const analysis = await CogniVerdictAPI.getCaseAnalysis(activeCaseId);
-      setCases(prev => prev.map(c => {
-        if (c.id === activeCaseId) {
-          return {
-            ...c,
-            confidenceScore: analysis.ui_metrics.confidenceScore,
-            suspectProbability: analysis.ui_metrics.suspectProbability,
-            convictionProbability: analysis.ui_metrics.convictionProbability,
-            witnesses: analysis.ui_metrics.witnesses,
-            contradictions: analysis.ui_metrics.contradictions,
-            feedbacks: analysis.feedbacks,
-            status: "completed"
-          };
-        }
-        return c;
-      }));
-    } catch (err) {
-      console.error("Failed to reload analysis after graph improvement:", err);
-    }
-  };
-
-  // Handle forget memory
-  const handleForgetMemory = async (dataId?: string, memoryOnly = false) => {
-    if (!activeCaseId) return;
-    await CogniVerdictAPI.forgetMemory(activeCaseId, dataId, memoryOnly);
-    
-    // Reset view states if entire case was forgotten
-    if (!dataId && !memoryOnly) {
-      setCases(prev => prev.filter(c => c.id !== activeCaseId));
-      setActiveCaseId(null);
-      setActiveTab("library");
-    } else {
-      // Reload case data to reflect changes
-      const graph = await CogniVerdictAPI.getCaseGraph(activeCaseId);
-      setGraphNodes(graph.nodes);
-      setGraphEdges(graph.edges);
-    }
-  };
-
-  // Render active tab view content
-  const renderTabContent = () => {
-    switch (activeTab) {
-      case "library":
-        return (
-          <CaseLibrary
-            cases={cases}
-            activeCaseId={activeCaseId}
-            onSelectCase={handleSelectCase}
-            onUploadCollection={handleUploadCollection}
-          />
-        );
-      case "explorer":
-        return (
-          <MemoryExplorer
-            activeCaseId={activeCaseId}
-            nodes={graphNodes}
-            edges={graphEdges}
-            chunks={caseChunks}
-            provenance={caseProvenance}
-            citations={caseCitations}
-          />
-        );
-      // case "mindmap":
-      //   return (
-      //     <InteractiveMindmap
-      //       activeCaseId={activeCaseId}
-      //       activeCaseName={activeCase?.name}
-      //       isLive={isLive}
-      //     />
-      //   );
-      case "chat":
-        return (
-          <AdvisoryChat
-            activeCaseId={activeCaseId}
-            activeCaseName={activeCase?.name}
-            messages={chatHistory[activeCaseId || ""] || []}
-            onSendMessage={handleSendChatMessage}
-            isSending={isSendingChat}
-          />
-        );
-      case "analysis":
-        if (isAnalysisLoading) {
-          return (
-            <div className="flex-1 flex flex-col items-center justify-center text-center text-[#5C615D] bg-[#FAF6F0] h-screen font-serif">
-              <div className="flex flex-col items-center gap-4 p-8 bg-[#F4F0E6] border border-[#D0CBB7] rounded-2xl shadow-sm max-w-md">
-                <div className="relative w-16 h-16 flex items-center justify-center">
-                  <div className="absolute inset-0 border-4 border-[#4A6B53]/20 rounded-full" />
-                  <div className="absolute inset-0 border-4 border-[#4A6B53] border-t-transparent rounded-full animate-spin" />
-                  <Scale className="w-6 h-6 text-[#4A6B53] animate-pulse" />
-                </div>
-                <h4 className="font-semibold text-lg text-[#2D312E] tracking-tight mt-2">Running Legal Intelligence Engine</h4>
-                <p className="text-xs text-[#5C615D] leading-relaxed">
-                  Executing Phase 3 LLM reasoning orchestration and Phase 4 mathematical evidence weighting. This may take up to 20 seconds.
-                </p>
-              </div>
-            </div>
-          );
-        }
-        return (
-          <AnalysisDashboard
-            activeCaseId={activeCaseId}
-            activeCase={activeCase}
-            nodes={graphNodes}
-            edges={graphEdges}
-            onImproveMemory={handleImproveMemory}
-            onSubmitFeedback={handleApplyFeedback}
-            onAnalyzeCase={handleAnalyzeCase}
-          />
-        );
-      case "feedback":
-        if (isAnalysisLoading) {
-          return (
-            <div className="flex-1 flex flex-col items-center justify-center text-center text-[#5C615D] bg-[#FAF6F0] h-screen font-serif">
-              <div className="flex flex-col items-center gap-4 p-8 bg-[#F4F0E6] border border-[#D0CBB7] rounded-2xl shadow-sm max-w-md">
-                <div className="relative w-16 h-16 flex items-center justify-center">
-                  <div className="absolute inset-0 border-4 border-[#4A6B53]/20 rounded-full" />
-                  <div className="absolute inset-0 border-4 border-[#4A6B53] border-t-transparent rounded-full animate-spin" />
-                  <Scale className="w-6 h-6 text-[#4A6B53] animate-pulse" />
-                </div>
-                <h4 className="font-semibold text-lg text-[#2D312E] tracking-tight mt-2">Running Legal Intelligence Engine</h4>
-                <p className="text-xs text-[#5C615D] leading-relaxed">
-                  Executing Phase 3 LLM reasoning orchestration and Phase 4 mathematical evidence weighting. This may take up to 20 seconds.
-                </p>
-              </div>
-            </div>
-          );
-        }
-        return (
-          <FeedbackPanel
-            activeCaseId={activeCaseId}
-            activeCase={activeCase}
-            evidenceNodes={evidenceNodes}
-            onImproveMemory={handleImproveMemory}
-            onForgetMemory={handleForgetMemory}
-            onSubmitFeedback={handleApplyFeedback}
-          />
-        );
-      case "benchmarking":
-        return (
-          <BenchmarkPanel />
-        );
-      default:
-        return (
-          <div className="flex-1 p-8 text-[#2D312E]">
-            Screen not found.
-          </div>
-        );
-    }
-  };
-
-  if (isLoading) {
-    return (
-      <div className="flex w-full h-screen bg-[#FAF6F0] items-center justify-center text-[#2D312E] font-sans">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-4 border-[#4A6B53] border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm font-semibold tracking-wide text-[#5C615D]">Initializing CogniVerdict Workspace...</p>
-        </div>
-      </div>
-    );
-  }
-
+export default function LandingPage() {
   return (
-    <div className="flex w-full h-screen overflow-hidden bg-[#FAF6F0]">
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        isLive={isLive}
-        activeCaseName={activeCase?.name || undefined}
-      />
-      {renderTabContent()}
+    <div className="min-h-screen bg-[#FAF6F0] text-[#2D312E] font-sans selection:bg-[#4A6B53] selection:text-white overflow-x-hidden">
+      {/* Top Navbar */}
+      <header className="border-b border-[#E8E2D5] bg-[#FAF6F0]/80 backdrop-blur-md sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 h-18 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#4A6B53] flex items-center justify-center shadow-md shadow-[#4A6B53]/20">
+              <Scale className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <span className="font-serif font-bold text-lg tracking-wide text-[#2D312E]">CogniVerdict</span>
+              <span className="block text-[10px] tracking-widest text-[#5C615D] uppercase font-sans">Legal Intelligence</span>
+            </div>
+          </div>
+          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-[#5C615D]">
+            <a href="#features" className="hover:text-[#2D312E] transition-colors duration-200">Features</a>
+            <a href="#tech-stack" className="hover:text-[#2D312E] transition-colors duration-200">Tech Stack</a>
+          </nav>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/dashboard"
+              className="px-5 py-2.5 rounded-xl bg-[#4A6B53] hover:bg-[#3D5944] text-white text-sm font-semibold transition-all duration-200 shadow-md shadow-[#4A6B53]/10 hover:shadow-[#4A6B53]/20 flex items-center gap-2 group"
+            >
+              Launch Workspace
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform duration-200" />
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      {/* Hero Section */}
+      <section className="relative pt-20 pb-24 md:pt-32 md:pb-36 border-b border-[#E8E2D5] bg-radial-[circle_at_center_top] from-[#F4EFE6] via-[#FAF6F0] to-[#FAF6F0]">
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#EAE3D5_1px,transparent_1px),linear-gradient(to_bottom,#EAE3D5_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] opacity-40 pointer-events-none" />
+
+        <div className="max-w-5xl mx-auto px-6 text-center relative z-10">
+
+          <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-[#1C201D] max-w-4xl mx-auto leading-[1.1] mb-6">
+            Where Evidence Meets <span className="text-[#4A6B53] underline decoration-[#E6AD45] decoration-wavy">Evolving Graph Memory</span>
+          </h1>
+
+          <p className="text-base sm:text-lg md:text-xl text-[#5C615D] max-w-2xl mx-auto leading-relaxed mb-10 font-light">
+            Transform unstructured legal briefs, statements, and forensic dossiers into self-correcting knowledge graphs. Quantify credibility and verify case theories automatically.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link
+              href="/dashboard"
+              className="w-full sm:w-auto px-8 py-4 rounded-xl bg-[#4A6B53] hover:bg-[#3D5944] text-white text-base font-semibold transition-all duration-200 shadow-lg shadow-[#4A6B53]/15 flex items-center justify-center gap-2 group"
+            >
+              Enter Dashboard
+              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform duration-200" />
+            </Link>
+            <a
+              href="#features"
+              className="w-full sm:w-auto px-8 py-4 rounded-xl bg-[#F0EAE1] hover:bg-[#E7DFD4] text-[#2D312E] border border-[#DCD3C4] text-base font-semibold transition-all duration-200 flex items-center justify-center"
+            >
+              Explore Features
+            </a>
+          </div>
+
+          {/* Interactive Mockup Preview */}
+          <div className="mt-16 md:mt-20 border border-[#D2CAB6] bg-[#F2ECE0] p-3 rounded-2xl shadow-xl shadow-[#2D312E]/5 relative group">
+            <div className="rounded-xl overflow-hidden border border-[#D2CAB6] bg-[#FAF6F0] aspect-[16/9] flex flex-col shadow-sm">
+              {/* Fake Window bar */}
+              <div className="h-10 bg-[#EFECE1] border-b border-[#D2CAB6] px-4 flex items-center justify-between">
+                <div className="flex gap-1.5">
+                  <div className="w-3 h-3 rounded-full bg-[#E05E56]" />
+                  <div className="w-3 h-3 rounded-full bg-[#F4B41A]" />
+                  <div className="w-3 h-3 rounded-full bg-[#27C93F]" />
+                </div>
+                <div className="text-[10px] text-[#5C615D] font-mono tracking-widest uppercase">CogniVerdict Case Analyzer</div>
+                <div className="w-12" />
+              </div>
+              {/* Fake Dashboard Body */}
+              <div className="flex-1 flex flex-col md:flex-row p-6 gap-6 bg-[#FAF6F0]">
+                {/* Left Side Panel */}
+                <div className="w-full md:w-1/3 flex flex-col gap-4">
+                  <div className="bg-[#FAF6F0] border border-[#E5DEC9] p-4 rounded-xl text-left">
+                    <span className="text-[10px] text-[#4A6B53] font-semibold tracking-wider uppercase block mb-1">Active Dossier</span>
+                    <h3 className="font-serif font-bold text-base text-[#2D312E]">CASE_003: Sector 17 Burglary</h3>
+                    <p className="text-[11px] text-[#5C615D] mt-1.5 line-clamp-2">Burglary at Mehta residence. Stolen Gold watch and ₹2.5 lakh cash. Fingerprint matches Rohan Verma.</p>
+                  </div>
+                  <div className="bg-[#FAF6F0] border border-[#E5DEC9] p-4 rounded-xl text-left">
+                    <span className="text-[10px] text-[#E6AD45] font-semibold tracking-wider uppercase block mb-1">Scoring metrics</span>
+                    <div className="flex justify-between items-center mt-2 border-b border-[#FAF6F0] pb-2">
+                      <span className="text-xs text-[#5C615D]">Suspect Match</span>
+                      <span className="text-xs font-bold text-[#2D312E]">Rohan Verma (92%)</span>
+                    </div>
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="text-xs text-[#5C615D]">Conviction Probability</span>
+                      <span className="text-xs font-bold text-[#4A6B53]">74.5%</span>
+                    </div>
+                  </div>
+                </div>
+                {/* Right Side Panel - Fake Contradiction Network */}
+                <div className="flex-1 bg-[#FAF6F0] border border-[#E5DEC9] p-4 rounded-xl flex flex-col justify-between text-left">
+                  <div>
+                    <span className="text-[10px] text-red-600 font-semibold tracking-wider uppercase block mb-1">Contradiction alert</span>
+                    <h4 className="font-serif text-sm font-bold text-[#2D312E] mb-2">Timeline Discrepancy: Priya Mehta Statement</h4>
+                    <p className="text-xs text-[#5C615D] leading-relaxed">
+                      Priya claims she saw Rohan exit at <strong className="text-[#2D312E]">7:30 PM</strong>. However, gate CCTV records no movement until <strong className="text-[#2D312E]">8:47 PM</strong>. Investigation suggests Priya misjudged time due to the 7:20 PM sector power outage.
+                    </p>
+                  </div>
+                  <div className="bg-[#F0EAE1] border border-[#D9D1BF] p-3 rounded-lg flex items-center justify-between mt-4">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-[#4A6B53]" />
+                      <span className="text-[11px] text-[#5C615D]">Mapped to: <code className="text-[#2D312E] bg-[#E7DFD1] px-1 py-0.5 rounded">WS-003.json (Line 12)</code></span>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-[#FAF6F0] text-[#E6AD45] border border-[#D5CDBC] font-mono">ADJUSTABLE</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Core Features Grid */}
+      <section id="features" className="py-24 max-w-7xl mx-auto px-6">
+        <div className="text-center max-w-3xl mx-auto mb-16">
+          <h2 className="font-serif text-3xl md:text-4xl font-bold tracking-tight text-[#2D312E] mb-4">
+            Designed for Precise Judicial Reasoning
+          </h2>
+          <p className="text-[#5C615D] font-light leading-relaxed">
+            CogniVerdict replaces standard black-box AI outputs with structured, mathematical calculations grounded directly in document memory graphs.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+          {/* Card 1: Ingestion (remember) */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Memory Ingestion <span className="text-xs font-mono block text-[#4A6B53]">remember()</span></h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Parses raw case documents (PDFs, JSON witness briefs), chunks texts semantically, and builds the initial entity-relationship graph in Cognee.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 2: Retrieval (recall) */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Context Retrieval <span className="text-xs font-mono block text-[#4A6B53]">recall()</span></h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Queries the case dataset by traversing graph topologies and fetching vector chunks to ground the advisory chat and reasoning engines.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 3: Alignment (improve) */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Real-time Alignment <span className="text-xs font-mono block text-[#4A6B53]">improve()</span></h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Enriches and optimizes graph representation in the background, restructuring entity relations based on submitted feedback.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 4: Pruning (forget) */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Controlled Pruning <span className="text-xs font-mono block text-[#4A6B53]">forget()</span></h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Cleans and prunes discredited evidence nodes, invalid witness statements, or deletes entire case datasets securely.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 5: Parallel Agent Reasoning */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Parallel Agent Reasoning</h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Runs contradictions, motives, and credibility analyses concurrently via <code className="text-[#2D312E] bg-[#E7DFD1] px-1 rounded">asyncio.gather</code>, completing tasks in seconds.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 6: Explainable Mapping */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Explainable Mapping</h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Links every graph connection back to raw source lines (e.g. <code className="text-[#2D312E] bg-[#E7DFD1] px-1 rounded">WS-005.json</code>) so that all AI logic remains human-verifiable.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 7: Continuous Benchmarking */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Continuous Benchmarking</h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Evaluates suspect predictions, vector recall rates, and MAE scores against hidden judicial ground truths continuously.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 8: Deterministic Scoring */}
+          <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-8 rounded-2xl hover:border-[#4A6B53] transition-all duration-300 group flex flex-col justify-between">
+            <div>
+
+              <h3 className="font-serif font-bold text-lg text-[#2D312E] mb-3">Deterministic Scoring</h3>
+              <p className="text-sm text-[#5C615D] leading-relaxed font-light">
+                Blends extracted qualitative signals with mathematical credibility and strength formulas for objective conviction likelihood.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Tech Stack Section */}
+      <section id="tech-stack" className="py-24 bg-[#FAF6F0] border-t border-[#E8E2D5]">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center max-w-2xl mx-auto mb-16">
+            <h2 className="font-serif text-3xl font-bold tracking-tight text-[#2D312E] mb-4">
+              Built on a Modern, Premium Architecture
+            </h2>
+            <p className="text-[#5C615D] font-light text-sm leading-relaxed">
+              Standardized engineering patterns that enable millisecond-level responsiveness and clean separation of concerns.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-6 rounded-xl text-center">
+              <span className="font-serif text-xl font-bold text-[#2D312E] block mb-1">Cognee Cloud</span>
+              <span className="text-xs text-[#5C615D]">Graph & Vector DB Memory</span>
+            </div>
+            <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-6 rounded-xl text-center">
+              <span className="font-serif text-xl font-bold text-[#2D312E] block mb-1">FastAPI</span>
+              <span className="text-xs text-[#5C615D]">Python Async Services</span>
+            </div>
+            <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-6 rounded-xl text-center">
+              <span className="font-serif text-xl font-bold text-[#2D312E] block mb-1">Next.js 16</span>
+              <span className="text-xs text-[#5C615D]">Frontend App Router</span>
+            </div>
+            <div className="bg-[#F6F1E5] border border-[#E5DEC9] p-6 rounded-xl text-center">
+              <span className="font-serif text-xl font-bold text-[#2D312E] block mb-1">NVIDIA NIM</span>
+              <span className="text-xs text-[#5C615D]">Llama 3.1 70B Reasoning</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Call To Action */}
+      <section className="py-24 text-center max-w-4xl mx-auto px-6">
+        <h2 className="font-serif text-3xl sm:text-4xl font-bold text-[#2D312E] mb-6">
+          Ready to Calibrate Your Case Reasoning?
+        </h2>
+        <p className="text-base text-[#5C615D] font-light max-w-xl mx-auto mb-10 leading-relaxed">
+          Ingest new legal dossiers, visualize the connection topology, and let the parallelized multi-agent analysis work for you.
+        </p>
+        <Link
+          href="/dashboard"
+          className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-[#4A6B53] hover:bg-[#3D5944] text-white text-base font-semibold transition-all duration-200 shadow-lg shadow-[#4A6B53]/15 group"
+        >
+          Launch Workspace
+          <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform duration-200" />
+        </Link>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-[#E8E2D5] py-12 bg-[#EFECE1] text-[#5C615D]">
+        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="flex items-center gap-2">
+            <Scale className="w-4 h-4 text-[#4A6B53]" />
+            <span className="text-xs font-mono uppercase tracking-widest text-[#2D312E]">CogniVerdict Workspace &copy; 2026</span>
+          </div>
+          <div className="flex gap-8 text-xs">
+            <a href="https://cognee.ai" className="hover:text-[#2D312E] transition-colors duration-200">Cognee Cloud</a>
+            <a href="https://nextjs.org" className="hover:text-[#2D312E] transition-colors duration-200">Next.js</a>
+            <a href="https://fastapi.tiangolo.com" className="hover:text-[#2D312E] transition-colors duration-200">FastAPI</a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
